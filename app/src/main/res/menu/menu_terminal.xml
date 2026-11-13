@@ -8,6 +8,11 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_send_command"
+        android:title="@string/action_send_command"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_copy_screen"
         android:title="@string/action_copy_screen"
         app:showAsAction="never" />

@@ -21,10 +21,12 @@ import androidx.appcompat.widget.AppCompatEditText
  *  - All forwarding happens from the [InputConnection], never from a
  *    TextWatcher. A TextWatcher sees composing text (pinyin, kana, ...) as if
  *    it were committed and destroys the IME's composition state.
- *  - The backing buffer is kept empty. Composing text is allowed to live there
- *    while the IME is working and is cleared as soon as text is committed.
- *  - Enter arrives as `commitText("\n")`, `commitText("\r")`, a raw key event
- *    or `performEditorAction`, depending on the IME. All four are handled.
+ *  - Committed text is forwarded and then *discarded from the buffer*. It is
+ *    never inserted first: inserting and clearing again makes several Chinese
+ *    IMEs (Sogou, Baidu, Samsung) re-send or drop the characters.
+ *  - Enter arrives as `commitText("\n")`, `commitText("\r")`, a raw key event,
+ *    `performEditorAction` or `onEditorAction`, depending on the IME. All of
+ *    them are handled and all of them end up as a single CR.
  */
 @Suppress("DEPRECATION") // KeyEvent.getCharacters() for ACTION_MULTIPLE
 class TerminalInputView @JvmOverloads constructor(
@@ -62,23 +64,22 @@ class TerminalInputView @JvmOverloads constructor(
 
         return object : InputConnectionWrapper(base, true) {
 
-            private val editable get() = this@TerminalInputView.text
-
-            private fun bufferIsEmpty(): Boolean = editable.isNullOrEmpty()
+            /** Text the IME is currently composing (pinyin candidates, ...). */
+            private fun composing(): Boolean = !this@TerminalInputView.text.isNullOrEmpty()
 
             private fun clearBuffer() {
-                val buffer = editable ?: return
+                val buffer = this@TerminalInputView.text ?: return
                 if (buffer.isNotEmpty()) buffer.clear()
             }
 
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                 val committed = text?.toString().orEmpty()
-                // Let the EditText finish its composition state normally first,
-                // then forward the final text and keep the invisible buffer empty.
-                val handled = super.commitText(text ?: "", newCursorPosition)
-                if (committed.isNotEmpty()) onCommitText?.invoke(committed)
+                // Drop any leftover composing text, then forward. Nothing is
+                // inserted into the (invisible) buffer, so the IME never sees a
+                // phantom character it did not put there.
                 clearBuffer()
-                return handled || committed.isNotEmpty()
+                if (committed.isNotEmpty()) onCommitText?.invoke(committed)
+                return true
             }
 
             override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
@@ -88,8 +89,7 @@ class TerminalInputView @JvmOverloads constructor(
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                 // While composing, the IME is deleting its own candidate text.
-                if (bufferIsEmpty() && beforeLength > 0 && onBackspace?.invoke() == true) {
-                    clearBuffer()
+                if (!composing() && beforeLength > 0 && onBackspace?.invoke() == true) {
                     return true
                 }
                 return super.deleteSurroundingText(beforeLength, afterLength)
@@ -99,8 +99,7 @@ class TerminalInputView @JvmOverloads constructor(
                 beforeLength: Int,
                 afterLength: Int
             ): Boolean {
-                if (bufferIsEmpty() && beforeLength > 0 && onBackspace?.invoke() == true) {
-                    clearBuffer()
+                if (!composing() && beforeLength > 0 && onBackspace?.invoke() == true) {
                     return true
                 }
                 return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
@@ -110,7 +109,7 @@ class TerminalInputView @JvmOverloads constructor(
                 if (event == null) return super.sendKeyEvent(event)
                 val code = event.keyCode
                 val isEnter = code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER
-                val isDelete = code == KeyEvent.KEYCODE_DEL
+                val isDelete = code == KeyEvent.KEYCODE_DEL || code == KeyEvent.KEYCODE_FORWARD_DEL
 
                 when (event.action) {
                     KeyEvent.ACTION_UP -> {
@@ -121,8 +120,8 @@ class TerminalInputView @JvmOverloads constructor(
                     KeyEvent.ACTION_MULTIPLE -> {
                         val chars = event.characters
                         if (!chars.isNullOrEmpty()) {
-                            onCommitText?.invoke(chars)
                             clearBuffer()
+                            onCommitText?.invoke(chars)
                             return true
                         }
                     }
@@ -133,7 +132,7 @@ class TerminalInputView @JvmOverloads constructor(
                                 return true
                             }
                         } else if (isDelete) {
-                            if (!bufferIsEmpty()) {
+                            if (composing()) {
                                 // Composition in progress: let the IME delete
                                 // its own candidate text instead of sending a
                                 // backspace to the shell.
@@ -165,7 +164,31 @@ class TerminalInputView @JvmOverloads constructor(
 
     /** Hardware keyboards (and IMEs with no active InputConnection) land here. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // While the IME owns composing text, DEL belongs to the candidate, not
+        // to the shell. Forwarding it as well would delete a server-side
+        // character on every pinyin correction.
+        val isDelete = keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL
+        if (isDelete && composing()) return super.onKeyDown(keyCode, event)
         if (onKeyFallback?.invoke(event) == true) return true
         return super.onKeyDown(keyCode, event)
     }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        // The DOWN was already turned into terminal bytes; the UP must not also
+        // reach the EditText (it would insert a newline or delete a char).
+        if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+            keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL
+        ) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onEditorAction(actionCode: Int) {
+        // Last-chance Enter handler for IMEs that bypass the InputConnection.
+        if (onEnter?.invoke() == true) return
+        super.onEditorAction(actionCode)
+    }
+
+    private fun composing(): Boolean = !text.isNullOrEmpty()
 }

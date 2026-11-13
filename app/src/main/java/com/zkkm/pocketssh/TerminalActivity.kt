@@ -6,12 +6,14 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.view.Gravity
 import android.view.MenuItem
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -40,6 +42,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private lateinit var terminal: TerminalView
     private lateinit var imeInput: TerminalInputView
     private lateinit var keyBar: LinearLayout
+    private lateinit var statsView: TextView
     private lateinit var emulator: VtEmulator
 
     private var session: SshSession? = null
@@ -49,6 +52,11 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private var ctrlKey: TextView? = null
     private var altKey: TextView? = null
     private var disconnectedDialogShown = false
+
+    /** Bytes pushed to the session / received from it, shown in the stats bar. */
+    private var txBytes = 0L
+    private var rxBytes = 0L
+    private var lastStatsAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +78,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         terminal = findViewById(R.id.terminal)
         imeInput = findViewById(R.id.imeInput)
         keyBar = findViewById(R.id.keyBar)
+        statsView = findViewById(R.id.inputStats)
 
         toolbar.title = host!!.displayName()
         toolbar.subtitle = host!!.subtitle()
@@ -80,6 +89,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         setupTerminal()
         setupIme()
         setupKeyBar()
+        renderStats()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = confirmExit()
@@ -146,6 +156,34 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         imeInput.onKeyFallback = { event -> terminal.handleHardwareKey(event) }
 
         terminal.onRequestImeFocus = { focusIme() }
+
+        // Hold focus from the very first frame so the keyboard can be raised as
+        // soon as the window is shown, even while the session is still opening.
+        imeInput.requestFocus()
+    }
+
+    /**
+     * The stats line exists to answer one question without a cable or logcat:
+     * do keystrokes actually leave the app? If "输入" stays at 0 B while the
+     * user types, the problem is the IME bridge; if it grows but the screen
+     * does not change, the problem is the session.
+     */
+    private fun renderStats(force: Boolean = false) {
+        if (!::statsView.isInitialized) return
+        val now = SystemClock.uptimeMillis()
+        if (!force && now - lastStatsAt < 250L) return
+        lastStatsAt = now
+        statsView.text = getString(
+            R.string.stats_format,
+            formatBytes(txBytes),
+            formatBytes(rxBytes)
+        )
+    }
+
+    private fun formatBytes(value: Long): String = when {
+        value < 1024L -> "$value B"
+        value < 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f KB", value / 1024.0)
+        else -> String.format(java.util.Locale.US, "%.1f MB", value / (1024.0 * 1024.0))
     }
 
     /**
@@ -172,6 +210,11 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && ::imeInput.isInitialized) focusIme()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::imeInput.isInitialized) imeInput.post { focusIme() }
     }
 
     private class KeySpec(val label: String, val action: () -> Unit)
@@ -257,6 +300,9 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         val target = host ?: return
         session?.disconnect()
         disconnectedDialogShown = false
+        txBytes = 0L
+        rxBytes = 0L
+        renderStats(force = true)
         val newSession = SshSession(
             target,
             knownHosts,
@@ -291,6 +337,8 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     }
 
     override fun onTerminalInput(bytes: ByteArray) {
+        txBytes += bytes.size
+        renderStats(force = true)
         session?.write(bytes)
     }
 
@@ -307,8 +355,10 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
 
     override fun onOutput(data: ByteArray, length: Int) {
         if (isFinishing) return
+        rxBytes += length
         emulator.feed(data, 0, length)
         terminal.invalidateTerminal()
+        renderStats()
     }
 
     override fun onDisconnected(reason: String) {
@@ -357,6 +407,10 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
             connect()
             true
         }
+        R.id.action_send_command -> {
+            showCommandDialog()
+            true
+        }
         R.id.action_copy_screen -> {
             copyScreen()
             true
@@ -396,6 +450,53 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText("terminal", text))
         Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Escape hatch for keyboards that refuse to talk to the hidden IME host:
+     * type (or paste) the command in a real EditText and send it as one chunk
+     * plus Enter. This path does not involve [TerminalInputView] at all.
+     */
+    private fun showCommandDialog() {
+        val input = EditText(this).apply {
+            setText(clipboardText().orEmpty())
+            setSelection(text.length)
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = false
+            minLines = 3
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            textSize = 14f
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_send_command_title)
+            .setMessage(R.string.dialog_send_command_message)
+            .setView(input)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_send, null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val text = input.text?.toString().orEmpty()
+                dialog.dismiss()
+                if (text.isEmpty()) return@setOnClickListener
+                terminal.sendText(if (text.endsWith("\n")) text else "$text\n")
+                focusIme()
+            }
+            input.requestFocus()
+        }
+        dialog.setOnDismissListener { imeInput.post { focusIme() } }
+        dialog.show()
+    }
+
+    private fun clipboardText(): String? {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clip = clipboard?.primaryClip ?: return null
+        if (clip.itemCount == 0) return null
+        return clip.getItemAt(0)?.coerceToText(this)?.toString()
     }
 
     private fun confirmExit() {

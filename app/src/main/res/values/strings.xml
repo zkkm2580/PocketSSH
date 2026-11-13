@@ -24,6 +24,12 @@
     <string name="action_font_smaller">缩小字体</string>
     <string name="action_clear_screen">清屏</string>
     <string name="action_copy_screen">复制屏幕内容</string>
+    <string name="action_send_command">输入命令…</string>
+    <string name="action_send">发送</string>
+
+    <string name="stats_format">输入 %1$s · 输出 %2$s</string>
+    <string name="dialog_send_command_title">输入命令</string>
+    <string name="dialog_send_command_message">命令会原样发送到当前会话并自动回车。键盘打不出字时可以用这里。</string>
 
     <string name="label_name">名称（可选）</string>
     <string name="label_host">主机地址</string>

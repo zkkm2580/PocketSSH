@@ -16,6 +16,19 @@
         app:subtitleTextColor="#8B95A5"
         app:titleTextColor="@color/terminal_foreground" />
 
+    <!-- Byte counters: proves whether keystrokes leave the app. -->
+    <TextView
+        android:id="@+id/inputStats"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/terminal_background"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="2dp"
+        android:singleLine="true"
+        android:textColor="#8B95A5"
+        android:textSize="10sp" />
+
     <com.zkkm.pocketssh.term.TerminalView
         android:id="@+id/terminal"
         android:layout_width="match_parent"
