@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PocketSSH</string>
+    <string name="app_tagline">手机上的 SSH 终端</string>
+
+    <string name="title_host_edit">新建连接</string>
+    <string name="title_host_edit_existing">编辑连接</string>
+    <string name="title_terminal">终端</string>
+
+    <string name="empty_hosts">还没有保存的连接\n点击右下角 + 新建一个 SSH 连接</string>
+    <string name="action_add">新建连接</string>
+    <string name="action_save">保存</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_connect">连接</string>
+    <string name="action_edit">编辑</string>
+    <string name="action_duplicate">复制</string>
+    <string name="action_delete">删除</string>
+    <string name="action_forget_key">忘记此主机密钥</string>
+    <string name="action_about">关于</string>
+    <string name="action_forget_all_keys">清除所有主机密钥</string>
+    <string name="action_reconnect">重新连接</string>
+    <string name="action_disconnect">断开连接</string>
+    <string name="action_font_bigger">放大字体</string>
+    <string name="action_font_smaller">缩小字体</string>
+    <string name="action_clear_screen">清屏</string>
+    <string name="action_copy_screen">复制屏幕内容</string>
+
+    <string name="label_name">名称（可选）</string>
+    <string name="label_host">主机地址</string>
+    <string name="label_port">端口</string>
+    <string name="label_username">用户名</string>
+    <string name="label_password">密码</string>
+    <string name="label_private_key">私钥内容（OpenSSH / PEM）</string>
+    <string name="label_passphrase">私钥口令（可选）</string>
+    <string name="hint_host">例如 192.168.1.10 或 example.com</string>
+    <string name="hint_username">例如 root</string>
+    <string name="hint_name">例如 家里的服务器</string>
+    <string name="hint_private_key">-----BEGIN OPENSSH PRIVATE KEY-----\n……\n-----END OPENSSH PRIVATE KEY-----</string>
+    <string name="auth_password">密码</string>
+    <string name="auth_key">私钥</string>
+    <string name="auth_mode">认证方式</string>
+    <string name="key_help">私钥只保存在本机应用私有目录，不会上传到任何服务器。支持 RSA / ECDSA / Ed25519。</string>
+    <string name="password_help">密码以明文保存在应用私有存储中，仅用于自动登录。</string>
+
+    <string name="err_host_required">请填写主机地址</string>
+    <string name="err_user_required">请填写用户名</string>
+    <string name="err_port_invalid">端口不合法</string>
+    <string name="err_credential_required">请填写密码或私钥</string>
+
+    <string name="status_connecting">正在连接…</string>
+    <string name="status_connected">已连接</string>
+    <string name="status_disconnected">已断开</string>
+    <string name="status_disconnected_reason">已断开：%1$s</string>
+
+    <string name="host_key_title">首次连接到此主机</string>
+    <string name="host_key_message">主机：%1$s\n密钥类型：%2$s\n指纹：%3$s\n\n请确认指纹与服务器一致后再信任。</string>
+    <string name="host_key_accept">信任并连接</string>
+    <string name="host_key_reject">取消</string>
+
+    <string name="dialog_disconnect_title">断开连接？</string>
+    <string name="dialog_disconnect_message">当前 SSH 会话将被关闭。</string>
+    <string name="dialog_delete_title">删除连接？</string>
+    <string name="dialog_delete_message">将删除 %1$s 的保存信息。</string>
+    <string name="dialog_forget_keys_title">清除所有主机密钥？</string>
+    <string name="dialog_forget_keys_message">下次连接任何主机时会重新询问是否信任。</string>
+
+    <string name="toast_copied">已复制到剪贴板</string>
+    <string name="toast_keys_cleared">已清除所有主机密钥</string>
+    <string name="toast_saved">已保存</string>
+    <string name="toast_deleted">已删除</string>
+
+    <string name="about_title">关于 PocketSSH</string>
+    <string name="about_message">PocketSSH 是一个开源的 Android SSH 客户端。\n\n• 自研 VT100 / xterm-256color 终端模拟器\n• 支持密码与私钥认证（RSA / ECDSA / Ed25519）\n• 首次连接记录主机密钥，之后自动校验\n• 支持 256 色、真彩色、Alternate Screen、滚动回看\n\n基于 Kotlin + JSch 构建，源码采用 MIT 协议。</string>
+
+    <string name="keybar_hint">上下滑动可回看历史，点击屏幕调出键盘</string>
+</resources>

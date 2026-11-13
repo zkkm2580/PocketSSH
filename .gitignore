@@ -1,0 +1,19 @@
+*.iml
+.gradle/
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+build/
+*.apk
+*.apk.idsig
+*.aab
+.kotlin/
+
+# Published APKs are tracked on purpose
+!dist/*.apk
