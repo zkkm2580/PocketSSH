@@ -6,9 +6,13 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MenuItem
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -21,6 +25,7 @@ import com.zkkm.pocketssh.ssh.HostStore
 import com.zkkm.pocketssh.ssh.KnownHostsStore
 import com.zkkm.pocketssh.ssh.SshHost
 import com.zkkm.pocketssh.ssh.SshSession
+import com.zkkm.pocketssh.term.TerminalInputView
 import com.zkkm.pocketssh.term.TerminalView
 import com.zkkm.pocketssh.term.VtEmulator
 
@@ -34,6 +39,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private lateinit var knownHosts: KnownHostsStore
     private lateinit var toolbar: MaterialToolbar
     private lateinit var terminal: TerminalView
+    private lateinit var imeInput: TerminalInputView
     private lateinit var keyBar: LinearLayout
     private lateinit var emulator: VtEmulator
 
@@ -44,6 +50,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private var ctrlKey: TextView? = null
     private var altKey: TextView? = null
     private var disconnectedDialogShown = false
+    private var forwardingImeText = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +70,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
 
         toolbar = findViewById(R.id.toolbar)
         terminal = findViewById(R.id.terminal)
+        imeInput = findViewById(R.id.imeInput)
         keyBar = findViewById(R.id.keyBar)
 
         toolbar.title = host!!.displayName()
@@ -72,6 +80,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         toolbar.setOnMenuItemClickListener { onMenuAction(it) }
 
         setupTerminal()
+        setupIme()
         setupKeyBar()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -103,6 +112,55 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         terminal.onModifierChanged = { updateModifierKeys() }
         terminal.setConnected(false)
         terminal.post { terminal.refreshGridSize() }
+    }
+
+    /**
+     * Wires the hidden EditText that hosts the soft keyboard. Every IME event
+     * (committed characters, backspace, enter, hardware keys) funnels through
+     * here into the terminal's send* methods.
+     */
+    private fun setupIme() {
+        imeInput.inputType = android.text.InputType.TYPE_CLASS_TEXT or
+            android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+            android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        imeInput.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+            android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN or
+            android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+
+        imeInput.onBackspace = {
+            terminal.sendBackspace()
+            true
+        }
+        imeInput.onEnter = {
+            terminal.sendEnter()
+            true
+        }
+        imeInput.onKeyFallback = { event -> terminal.handleHardwareKey(event) }
+
+        imeInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (forwardingImeText) return
+                val text = s?.toString().orEmpty()
+                if (text.isEmpty()) return
+                forwardingImeText = true
+                s?.clear()
+                forwardingImeText = false
+                terminal.sendText(text)
+            }
+        })
+
+        terminal.onRequestImeFocus = { focusIme() }
+    }
+
+    private fun focusIme() {
+        if (!imeInput.isFocused) {
+            imeInput.requestFocus()
+        }
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(imeInput, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private class KeySpec(val label: String, val action: () -> Unit)
@@ -141,7 +199,8 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
                 isClickable = true
                 isFocusable = false
                 setOnClickListener {
-                    terminal.requestFocus()
+                    // Keep input focus on the hidden EditText: buttons are not
+                    // focusable, so the keyboard stays exactly as it was.
                     spec.action()
                 }
             }
@@ -232,7 +291,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         if (isFinishing || isDestroyed) return
         updateStatus(getString(R.string.status_connected))
         terminal.setConnected(true)
-        terminal.requestFocus()
+        imeInput.post { focusIme() }
     }
 
     override fun onOutput(data: ByteArray, length: Int) {

@@ -6,25 +6,21 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.util.AttributeSet
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.inputmethod.BaseInputConnection
-import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputMethodManager
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 
 /**
- * Canvas-based terminal renderer plus soft-keyboard input plumbing.
+ * Canvas-based terminal renderer.
  *
  * The view owns no terminal state of its own: it paints whatever [emulator]
- * exposes and forwards user input to [listener].
+ * exposes and forwards user input to [listener]. Soft-keyboard input is hosted
+ * by a hidden [TerminalInputView] instead of a hand-rolled InputConnection,
+ * which is far more reliable across IMEs.
  */
 class TerminalView @JvmOverloads constructor(
     context: Context,
@@ -107,8 +103,9 @@ class TerminalView @JvmOverloads constructor(
     private val touchSlop = 8f
 
     init {
-        isFocusable = true
-        isFocusableInTouchMode = true
+        // Input focus belongs to the hidden TerminalInputView, never to this view.
+        isFocusable = false
+        isFocusableInTouchMode = false
         setBackgroundColor(colorBackground)
         updateTypeMetrics()
     }
@@ -174,7 +171,7 @@ class TerminalView @JvmOverloads constructor(
                 val line = emu.lineAt(row) ?: continue
                 drawLine(canvas, line, row)
             }
-            if (blinkOn && emu.showCursor && isFocused) {
+            if (blinkOn && emu.showCursor && blinkEnabled) {
                 drawCursor(canvas, emu)
             }
             val offset = emu.getScrollOffset()
@@ -385,8 +382,7 @@ class TerminalView @JvmOverloads constructor(
                         emu.setScrollOffset(0)
                         invalidate()
                     }
-                    requestFocus()
-                    showIme()
+                    requestIme()
                 }
                 dragging = false
                 return true
@@ -395,19 +391,11 @@ class TerminalView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
-    fun showIme() {
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-    }
+    /** Invoked when the user taps the terminal and expects the keyboard. */
+    var onRequestImeFocus: (() -> Unit)? = null
 
-    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
-        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
-        if (gainFocus && blinkEnabled) {
-            handler.removeCallbacks(blinkRunnable)
-            blinkOn = true
-            handler.postDelayed(blinkRunnable, 520)
-        }
-        invalidate()
+    fun requestIme() {
+        onRequestImeFocus?.invoke()
     }
 
     override fun onDetachedFromWindow() {
@@ -417,53 +405,16 @@ class TerminalView @JvmOverloads constructor(
 
     // ---------------------------------------------------------------------
     // Input
+    //
+    // The IME session lives in TerminalInputView; this view only reports the
+    // intent to type and translates non-text keys (hardware keyboard, key bar).
     // ---------------------------------------------------------------------
 
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
-            InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
-            EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-            EditorInfo.IME_ACTION_NONE
-        return object : BaseInputConnection(this, false) {
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                if (text != null) sendText(text.toString())
-                return true
-            }
-
-            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean = true
-
-            override fun finishComposingText(): Boolean = true
-
-            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                if (beforeLength > 0) {
-                    val n = beforeLength.coerceAtMost(32)
-                    val bytes = ByteArray(n) { 0x7F }
-                    sendBytes(bytes)
-                }
-                return true
-            }
-
-            override fun sendKeyEvent(event: KeyEvent): Boolean {
-                if (handleKeyEvent(event)) return true
-                return super.sendKeyEvent(event)
-            }
-        }
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (event != null && handleKeyEvent(event)) return true
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onKeyMultiple(keyCode: Int, repeatCount: Int, event: KeyEvent?): Boolean {
-        if (event != null && handleKeyEvent(event)) return true
-        return super.onKeyMultiple(keyCode, repeatCount, event)
-    }
-
-    private fun handleKeyEvent(event: KeyEvent): Boolean {
+    /**
+     * Translates a physical-keyboard or IME key event into terminal bytes.
+     * Returns true when the event was consumed.
+     */
+    fun handleHardwareKey(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_MULTIPLE) return false
         val ctrl = event.isCtrlPressed || ctrlActive
         val alt = event.isAltPressed || altActive
@@ -484,17 +435,14 @@ class TerminalView @JvmOverloads constructor(
             KeyEvent.KEYCODE_PAGE_DOWN -> "\u001b[6~"
             KeyEvent.KEYCODE_INSERT -> "\u001b[2~"
             else -> {
-                val unicode = event.getUnicodeChar(event.metaState)
-                val isSoftKeyboard = event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD ||
-                    event.flags and KeyEvent.FLAG_SOFT_KEYBOARD != 0
+                val unicode = event.unicodeChar
                 when {
                     unicode == 0 -> null
                     ctrl && unicode in 'a'.code..'z'.code -> (unicode - 96).toChar().toString()
                     ctrl && unicode in 'A'.code..'Z'.code -> (unicode - 64).toChar().toString()
                     ctrl && unicode == ' '.code -> "\u0000"
                     ctrl -> null
-                    isSoftKeyboard -> null
-                    else -> unicode.toChar().toString()
+                    else -> String(Character.toChars(unicode))
                 }
             }
         }
@@ -519,6 +467,12 @@ class TerminalView @JvmOverloads constructor(
     }
 
     fun sendArrow(direction: Char) = sendSequence(arrowSequence(direction))
+
+    fun sendBackspace(ctrl: Boolean = false) {
+        sendBytes(byteArrayOf(if (ctrl) 0x08 else 0x7F))
+    }
+
+    fun sendEnter() = sendSequence("\r")
 
     fun sendText(text: String) {
         if (text.isEmpty()) return
