@@ -15,6 +15,12 @@ Android SSH 客户端，纯 Kotlin 编写，自带 VT100 / xterm-256color 终端
 
 下载 `app-release.apk` 后安装即可（需允许安装未知来源应用）。
 
+### 1.0.2 修复
+
+- 修复手机上无法输入命令、回车无反应：隐藏输入框不再使用密码变体；字符改由 `InputConnection.commitText` 转发；`\n` / `\r` / `\r\n` 统一转成 `\r`；回车同时兼容 keyEvent 与 editor action 通道。
+- 中文输入法组词不再被 `TextWatcher` 打断，组词期间的退格交由输入法处理；对不带 `unicodeChar` 的按键增加 keyCode 兜底映射。
+- 主机密钥确认框、断线提示框关闭后自动恢复键盘焦点；`windowSoftInputMode` 由 `stateHidden` 改为 `stateUnchanged`。
+
 ### 说明
 
 本仓库提交的是一个**演示用签名证书**，仅用于让 CI 和本地构建产出可直接安装的 APK。

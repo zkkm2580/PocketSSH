@@ -54,7 +54,7 @@
 
 ### 常见问题
 
-- **能登录但打不出字 / 键盘弹不出来**：点一下终端区域即可唤起键盘。1.0.1 起输入法由隐藏的 `EditText` 承载（`TerminalInputView`），字符、退格、回车、方向键分别走 IME 的 commit / deleteSurroundingText / keyEvent 通道，不再依赖自定义 `InputConnection`。
+- **能登录但打不出字 / 键盘弹不出来 / 回车没反应**：点一下终端区域即可唤起键盘。1.0.2 起输入法由隐藏的 `EditText` 承载（`TerminalInputView`）：字符与回车统一由 `InputConnection.commitText` 转发，退格走 `deleteSurroundingText`，方向键等走 keyEvent；拼音等组合文本保留在 composing 缓冲区，不会被提前发走。换行统一转成 `\r`（PTY 提交命令需要回车符），并兼容 editor action 与 keyEvent 两种回车通道。首次连接的主机密钥确认框关闭后会自动恢复键盘焦点。
 - **连不上**：确认手机与服务器网络互通；公司网络可能屏蔽 22 端口，可改端口再试。
 - **提示主机密钥已更改**：说明服务器重装或换了密钥。确认无误后，在连接列表长按该主机 →「忘记此主机密钥」再连接。
 

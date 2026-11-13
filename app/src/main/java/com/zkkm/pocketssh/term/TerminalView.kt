@@ -435,15 +435,16 @@ class TerminalView @JvmOverloads constructor(
             KeyEvent.KEYCODE_PAGE_DOWN -> "\u001b[6~"
             KeyEvent.KEYCODE_INSERT -> "\u001b[2~"
             else -> {
-                val unicode = event.unicodeChar
-                when {
-                    unicode == 0 -> null
-                    ctrl && unicode in 'a'.code..'z'.code -> (unicode - 96).toChar().toString()
-                    ctrl && unicode in 'A'.code..'Z'.code -> (unicode - 64).toChar().toString()
-                    ctrl && unicode == ' '.code -> "\u0000"
-                    ctrl -> null
-                    else -> String(Character.toChars(unicode))
+                // IMEs that send raw key events often leave unicodeChar at 0
+                // (very common with password-style fields). Fall back to the
+                // key code so those characters are not silently lost.
+                val codePoint = if (event.unicodeChar != 0) {
+                    event.unicodeChar
+                } else {
+                    InputTranscoder.printableForKey(event.keyCode, event.isShiftPressed)
+                        ?: return false
                 }
+                InputTranscoder.mapKeyCharacter(codePoint, ctrl)
             }
         }
 
@@ -474,37 +475,19 @@ class TerminalView @JvmOverloads constructor(
 
     fun sendEnter() = sendSequence("\r")
 
+    /**
+     * Send IME-committed text to the PTY. LF, CR and CRLF all become one CR,
+     * which is what a canonical-mode shell needs to accept a command.
+     */
     fun sendText(text: String) {
         if (text.isEmpty()) return
-        val bracketed = emulator?.bracketedPaste == true && text.length > 20 && text.contains('\n')
-        val builder = StringBuilder()
-        if (bracketed) builder.append("\u001b[200~")
-        for (ch in text) {
-            when {
-                ctrlActive -> builder.append(controlCodeFor(ch).toChar())
-                altActive -> builder.append('\u001b').append(ch)
-                ch == '\n' -> builder.append('\r')
-                ch == '\r' -> Unit
-                else -> builder.append(ch)
-            }
-        }
-        if (bracketed) builder.append("\u001b[201~")
+        val bracketed = emulator?.bracketedPaste == true && text.length > 20 &&
+            (text.contains('\n') || text.contains('\r'))
+        val normalized = InputTranscoder.normalizeText(text, ctrlActive, altActive)
         val hadModifier = ctrlActive || altActive
         if (hadModifier) clearModifiers()
-        sendBytes(builder.toString().toByteArray(Charsets.UTF_8))
-    }
-
-    private fun controlCodeFor(ch: Char): Int = when (ch) {
-        in 'a'..'z' -> ch - 'a' + 1
-        in 'A'..'Z' -> ch - 'A' + 1
-        ' ' -> 0
-        '@' -> 0
-        '\\' -> 28
-        ']' -> 29
-        '^' -> 30
-        '_' -> 31
-        '?' -> 127
-        else -> ch.code
+        val payload = if (bracketed) "\u001b[200~$normalized\u001b[201~" else normalized
+        sendBytes(payload.toByteArray(Charsets.UTF_8))
     }
 
     fun toggleCtrl() {

@@ -22,7 +22,9 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
-    <!-- Invisible IME host: the terminal itself never takes input focus. -->
+    <!-- Invisible IME host: the terminal itself never takes input focus.
+         NOT a password field: password variations make many Chinese IMEs
+         bypass commitText entirely, which silently drops every keystroke. -->
     <com.zkkm.pocketssh.term.TerminalInputView
         android:id="@+id/imeInput"
         android:layout_width="1dp"
@@ -33,9 +35,10 @@
         android:cursorVisible="false"
         android:focusable="true"
         android:focusableInTouchMode="true"
+        android:imeOptions="actionNone|flagNoEnterAction|flagNoExtractUi|flagNoFullscreen"
+        android:importantForAutofill="no"
         android:includeFontPadding="false"
-        android:inputType="textMultiLine|textNoSuggestions|textVisiblePassword"
-        android:maxLines="1"
+        android:inputType="textMultiLine|textImeMultiLine|textNoSuggestions"
         android:padding="0dp"
         android:textSize="1sp" />
 

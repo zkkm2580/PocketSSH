@@ -17,3 +17,6 @@ build/
 
 # Published APKs are tracked on purpose
 !dist/*.apk
+
+# Local WorkBuddy workspace data (memory, session state) is not source.
+.workbuddy/

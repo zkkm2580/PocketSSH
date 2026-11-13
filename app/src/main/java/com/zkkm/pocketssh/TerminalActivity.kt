@@ -6,12 +6,11 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.Editable
-import android.text.TextWatcher
+import android.text.InputType
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.MenuItem
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -50,7 +49,6 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private var ctrlKey: TextView? = null
     private var altKey: TextView? = null
     private var disconnectedDialogShown = false
-    private var forwardingImeText = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,19 +113,28 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     }
 
     /**
-     * Wires the hidden EditText that hosts the soft keyboard. Every IME event
-     * (committed characters, backspace, enter, hardware keys) funnels through
-     * here into the terminal's send* methods.
+     * Wires the hidden EditText that hosts the soft keyboard.
+     *
+     * Text forwarding is driven entirely by TerminalInputView's InputConnection.
+     * A TextWatcher would also fire for composing text and break Chinese IMEs.
      */
     private fun setupIme() {
-        imeInput.inputType = android.text.InputType.TYPE_CLASS_TEXT or
-            android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-            android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-        imeInput.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-            android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN or
-            android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+        // Deliberately NOT a password variation: several Chinese keyboards
+        // refuse to use commitText for password fields, so every character
+        // would be silently dropped.
+        imeInput.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        imeInput.imeOptions = EditorInfo.IME_ACTION_NONE or
+            EditorInfo.IME_FLAG_NO_ENTER_ACTION or
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+            EditorInfo.IME_FLAG_NO_FULLSCREEN
 
+        imeInput.onCommitText = { text ->
+            terminal.sendText(text)
+            true
+        }
         imeInput.onBackspace = {
             terminal.sendBackspace()
             true
@@ -138,29 +145,33 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         }
         imeInput.onKeyFallback = { event -> terminal.handleHardwareKey(event) }
 
-        imeInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) {
-                if (forwardingImeText) return
-                val text = s?.toString().orEmpty()
-                if (text.isEmpty()) return
-                forwardingImeText = true
-                s?.clear()
-                forwardingImeText = false
-                terminal.sendText(text)
-            }
-        })
-
         terminal.onRequestImeFocus = { focusIme() }
     }
 
+    /**
+     * Give the invisible EditText focus and ask for the keyboard.
+     *
+     * Dialogs (host-key confirmation, reconnect prompt) steal view focus, and
+     * several IMEs ignore the first showSoftInput() right after a window gains
+     * focus, hence the delayed second attempt. Both calls are idempotent.
+     */
     private fun focusIme() {
-        if (!imeInput.isFocused) {
-            imeInput.requestFocus()
+        imeInput.post {
+            if (isFinishing || isDestroyed) return@post
+            if (!imeInput.isFocused) imeInput.requestFocus()
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(imeInput, InputMethodManager.SHOW_IMPLICIT)
+            imeInput.postDelayed({
+                if (isFinishing || isDestroyed) return@postDelayed
+                if (!imeInput.isFocused) imeInput.requestFocus()
+                imm?.showSoftInput(imeInput, InputMethodManager.SHOW_IMPLICIT)
+            }, 200L)
         }
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.showSoftInput(imeInput, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::imeInput.isInitialized) focusIme()
     }
 
     private class KeySpec(val label: String, val action: () -> Unit)
@@ -311,6 +322,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
                 .setMessage(reason)
                 .setNegativeButton(R.string.action_disconnect) { _, _ -> finish() }
                 .setPositiveButton(R.string.action_reconnect) { _, _ -> connect() }
+                .setOnDismissListener { imeInput.post { focusIme() } }
                 .setCancelable(true)
                 .show()
         }
@@ -332,6 +344,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
             .setCancelable(false)
             .setNegativeButton(R.string.host_key_reject) { _, _ -> respond(false) }
             .setPositiveButton(R.string.host_key_accept) { _, _ -> respond(true) }
+            .setOnDismissListener { imeInput.post { focusIme() } }
             .show()
     }
 
@@ -396,6 +409,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
             .setMessage(R.string.dialog_disconnect_message)
             .setNegativeButton(R.string.action_cancel, null)
             .setPositiveButton(R.string.action_disconnect) { _, _ -> finish() }
+            .setOnDismissListener { imeInput.post { focusIme() } }
             .show()
     }
 
