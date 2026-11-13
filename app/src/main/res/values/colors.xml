@@ -15,4 +15,6 @@
     <color name="terminal_background">#1E2127</color>
     <color name="terminal_foreground">#D7DAE0</color>
     <color name="keybar_background">#F1F3F7</color>
+    <color name="stats_normal">#8B95A5</color>
+    <color name="stats_error">#F07178</color>
 </resources>

@@ -40,6 +40,9 @@ class SshSession(
 
         /** Called on the main thread; [respond] must be invoked exactly once. */
         fun onHostKeyPrompt(endpoint: String, keyType: String, fingerprint: String, respond: (Boolean) -> Unit)
+
+        /** A write to the channel failed. Reported so it is never silent again. */
+        fun onWriteError(message: String) {}
     }
 
     @Volatile
@@ -76,6 +79,19 @@ class SshSession(
 
     private val writeLock = Any()
 
+    /** Write statistics, surfaced in the in-app diagnostics panel. */
+    @Volatile
+    var writtenBytes: Long = 0L
+        private set
+
+    @Volatile
+    var writeFailures: Int = 0
+        private set
+
+    @Volatile
+    var lastWriteError: String? = null
+        private set
+
     val isConnected: Boolean get() = connected
 
     private val endpoint: String
@@ -91,6 +107,9 @@ class SshSession(
         terminalRows = rows.coerceAtLeast(5)
         closing = false
         finishReported = false
+        writtenBytes = 0L
+        writeFailures = 0
+        lastWriteError = null
         worker = Thread({ runSession() }, "pocketssh-session").apply {
             isDaemon = true
             start()
@@ -119,15 +138,47 @@ class SshSession(
 
     fun write(bytes: ByteArray) {
         if (bytes.isEmpty()) return
-        val out = channelOut ?: return
-        synchronized(writeLock) {
-            try {
-                out.write(bytes)
-                out.flush()
-            } catch (e: IOException) {
-                // The read loop will notice and report the disconnect.
-            }
+        val ch = channel
+        if (ch == null || !ch.isConnected) {
+            recordWriteFailure("通道未就绪")
+            return
         }
+        val stream = channelOut ?: acquireStream(ch) ?: return
+        if (attemptWrite(stream, bytes)) return
+        // One retry on a freshly acquired stream. A failed flush leaves JSch's
+        // per-call stream closed, and reusing it would silently swallow every
+        // later keystroke while the UI still counts the bytes as "sent".
+        val fresh = acquireStream(ch) ?: return
+        attemptWrite(fresh, bytes)
+    }
+
+    private fun acquireStream(ch: ChannelShell): OutputStream? = try {
+        ch.outputStream.also { channelOut = it }
+    } catch (t: Throwable) {
+        recordWriteFailure(describeWriteError(t))
+        null
+    }
+
+    private fun attemptWrite(stream: OutputStream, bytes: ByteArray): Boolean = try {
+        synchronized(writeLock) {
+            stream.write(bytes)
+            stream.flush()
+        }
+        writtenBytes += bytes.size
+        lastWriteError = null
+        true
+    } catch (t: Throwable) {
+        recordWriteFailure(describeWriteError(t))
+        false
+    }
+
+    private fun describeWriteError(t: Throwable): String =
+        t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
+
+    private fun recordWriteFailure(message: String) {
+        writeFailures++
+        lastWriteError = message
+        post { listener.onWriteError(message) }
     }
 
     fun resize(cols: Int, rows: Int) {

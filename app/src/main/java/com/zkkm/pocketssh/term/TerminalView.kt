@@ -64,6 +64,15 @@ class TerminalView @JvmOverloads constructor(
     var altActive: Boolean = false
     var onModifierChanged: (() -> Unit)? = null
 
+    /**
+     * Paint what the user types locally, without waiting for the server.
+     *
+     * Off by default (a PTY normally echoes). It exists because some servers
+     * run with `stty -echo` or hand out a shell that never echoes, which makes
+     * a perfectly working session look dead.
+     */
+    var localEcho: Boolean = false
+
     var textSizeSp: Float = 14f
         set(value) {
             val clamped = value.coerceIn(7f, 30f)
@@ -473,7 +482,10 @@ class TerminalView @JvmOverloads constructor(
         sendBytes(byteArrayOf(if (ctrl) 0x08 else 0x7F))
     }
 
-    fun sendEnter() = sendSequence("\r")
+    fun sendEnter() {
+        if (localEcho) echoLocally("\r\n")
+        sendSequence("\r")
+    }
 
     /**
      * Send IME-committed text to the PTY. LF, CR and CRLF all become one CR,
@@ -487,7 +499,17 @@ class TerminalView @JvmOverloads constructor(
         val hadModifier = ctrlActive || altActive
         if (hadModifier) clearModifiers()
         val payload = if (bracketed) "\u001b[200~$normalized\u001b[201~" else normalized
+        if (localEcho) echoLocally(normalized)
         sendBytes(payload.toByteArray(Charsets.UTF_8))
+    }
+
+    /** Mirrors sent text into the emulator so the user can see their input. */
+    private fun echoLocally(text: String) {
+        val emu = emulator ?: return
+        if (text.isEmpty()) return
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        emu.feed(bytes, 0, bytes.size)
+        invalidateTerminal()
     }
 
     fun toggleCtrl() {

@@ -25,9 +25,17 @@
     <string name="action_clear_screen">清屏</string>
     <string name="action_copy_screen">复制屏幕内容</string>
     <string name="action_send_command">输入命令…</string>
+    <string name="action_local_echo">本地回显（键盘打不出字时用）</string>
+    <string name="action_diagnostics">连接诊断…</string>
+    <string name="action_self_test">发送测试命令</string>
+    <string name="action_close">关闭</string>
     <string name="action_send">发送</string>
 
     <string name="stats_format">输入 %1$s · 输出 %2$s</string>
+    <string name="stats_with_error">输入 %1$s · 输出 %2$s · 写入失败：%3$s</string>
+    <string name="toast_local_echo_on">本地回显已开启：打出的字会直接显示在屏幕上</string>
+    <string name="toast_local_echo_off">本地回显已关闭</string>
+    <string name="dialog_diagnostics_title">连接诊断</string>
     <string name="dialog_send_command_title">输入命令</string>
     <string name="dialog_send_command_message">命令会原样发送到当前会话并自动回车。键盘打不出字时可以用这里。</string>
 

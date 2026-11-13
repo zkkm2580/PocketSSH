@@ -13,6 +13,16 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_local_echo"
+        android:title="@string/action_local_echo"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_diagnostics"
+        android:title="@string/action_diagnostics"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_copy_screen"
         android:title="@string/action_copy_screen"
         app:showAsAction="never" />

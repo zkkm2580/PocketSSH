@@ -57,6 +57,8 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     private var txBytes = 0L
     private var rxBytes = 0L
     private var lastStatsAt = 0L
+    private var lastRxAt = 0L
+    private var writeErrorMessage: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -173,11 +175,19 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         val now = SystemClock.uptimeMillis()
         if (!force && now - lastStatsAt < 250L) return
         lastStatsAt = now
-        statsView.text = getString(
+        val base = getString(
             R.string.stats_format,
             formatBytes(txBytes),
             formatBytes(rxBytes)
         )
+        val error = writeErrorMessage
+        if (error != null) {
+            statsView.text = getString(R.string.stats_with_error, base, error)
+            statsView.setTextColor(ContextCompat.getColor(this, R.color.stats_error))
+        } else {
+            statsView.text = base
+            statsView.setTextColor(ContextCompat.getColor(this, R.color.stats_normal))
+        }
     }
 
     private fun formatBytes(value: Long): String = when {
@@ -302,6 +312,8 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         disconnectedDialogShown = false
         txBytes = 0L
         rxBytes = 0L
+        lastRxAt = 0L
+        writeErrorMessage = null
         renderStats(force = true)
         val newSession = SshSession(
             target,
@@ -338,6 +350,7 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
 
     override fun onTerminalInput(bytes: ByteArray) {
         txBytes += bytes.size
+        if (session?.lastWriteError == null) writeErrorMessage = null
         renderStats(force = true)
         session?.write(bytes)
     }
@@ -356,9 +369,16 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
     override fun onOutput(data: ByteArray, length: Int) {
         if (isFinishing) return
         rxBytes += length
+        lastRxAt = SystemClock.uptimeMillis()
         emulator.feed(data, 0, length)
         terminal.invalidateTerminal()
         renderStats()
+    }
+
+    override fun onWriteError(message: String) {
+        if (isFinishing || isDestroyed) return
+        writeErrorMessage = message
+        renderStats(force = true)
     }
 
     override fun onDisconnected(reason: String) {
@@ -409,6 +429,20 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         }
         R.id.action_send_command -> {
             showCommandDialog()
+            true
+        }
+        R.id.action_local_echo -> {
+            terminal.localEcho = !terminal.localEcho
+            Toast.makeText(
+                this,
+                if (terminal.localEcho) R.string.toast_local_echo_on else R.string.toast_local_echo_off,
+                Toast.LENGTH_LONG
+            ).show()
+            focusIme()
+            true
+        }
+        R.id.action_diagnostics -> {
+            showDiagnostics()
             true
         }
         R.id.action_copy_screen -> {
@@ -497,6 +531,72 @@ class TerminalActivity : AppCompatActivity(), TerminalView.Listener, SshSession.
         val clip = clipboard?.primaryClip ?: return null
         if (clip.itemCount == 0) return null
         return clip.getItemAt(0)?.coerceToText(this)?.toString()
+    }
+
+    // ---------------------------------------------------------------------
+    // Diagnostics
+    //
+    // "I typed but nothing happened" has two very different causes: the bytes
+    // never left the app, or they left and the server stayed silent. The panel
+    // below tells them apart without a cable or logcat.
+    // ---------------------------------------------------------------------
+
+    private fun showDiagnostics() {
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_diagnostics_title)
+            .setMessage(diagnosticsText())
+            .setNeutralButton(R.string.action_self_test, null)
+            .setPositiveButton(R.string.action_close, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                runSelfTest(dialog)
+            }
+        }
+        dialog.setOnDismissListener { imeInput.post { focusIme() } }
+        dialog.show()
+    }
+
+    private fun diagnosticsText(): String {
+        val s = session
+        val cursor = "${emulator.cursorRow + 1},${emulator.cursorCol + 1}"
+        return listOf(
+            "连接状态：" + if (s?.isConnected == true) "已连接" else "未连接",
+            "终端网格：${emulator.cols} × ${emulator.rows}　光标：$cursor",
+            "已发送：${formatBytes(txBytes)}　写入成功：${formatBytes(s?.writtenBytes ?: 0L)}",
+            "已接收：${formatBytes(rxBytes)}　最近收到：${lastRxText()}",
+            "写入失败：${s?.writeFailures ?: 0} 次",
+            "最后错误：${s?.lastWriteError ?: "无"}"
+        ).joinToString("\n")
+    }
+
+    private fun lastRxText(): String {
+        if (lastRxAt == 0L) return "尚未收到"
+        val seconds = (SystemClock.uptimeMillis() - lastRxAt) / 1000.0
+        return String.format(java.util.Locale.US, "%.1f 秒前", seconds)
+    }
+
+    private fun runSelfTest(dialog: androidx.appcompat.app.AlertDialog) {
+        val marker = "__POCKETSSH_OK__"
+        val before = rxBytes
+        terminal.sendText("echo $marker\n")
+        dialog.setMessage(diagnosticsText() + "\n\n已发送测试命令，等待 3 秒…")
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (isFinishing || isDestroyed || !dialog.isShowing) return@postDelayed
+            val gained = rxBytes - before
+            val failures = session?.writeFailures ?: 0
+            val verdict = when {
+                gained <= 0L && failures > 0 ->
+                    "❌ 写入失败，字符没有到达服务器。\n错误：${session?.lastWriteError ?: "未知"}"
+                gained <= 0L ->
+                    "❌ 写入没报错，但 3 秒内服务器一个字节都没回：\n会话可能已静默断开，或服务器不执行命令。"
+                emulator.snapshotText().contains(marker) ->
+                    "✅ 收到回显，发送与接收都正常。"
+                else ->
+                    "⚠️ 收到 ${formatBytes(gained)} 数据，但没看到测试标记：\n服务器可能关闭了 echo（可开启本地回显）。"
+            }
+            dialog.setMessage(diagnosticsText() + "\n\n" + verdict)
+        }, 3000L)
     }
 
     private fun confirmExit() {
