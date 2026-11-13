@@ -175,8 +175,8 @@ class SshSession(
                 newSession.setPassword(host.password)
             }
             newSession.userInfo = passwordUserInfo
-            newSession.setServerAliveInterval(20_000)
-            newSession.setServerAliveCountMax(4)
+            newSession.setServerAliveInterval(60_000)
+            newSession.setServerAliveCountMax(3)
             session = newSession
 
             newSession.connect(20_000)
@@ -185,9 +185,13 @@ class SshSession(
             val shell = newSession.openChannel("shell") as ChannelShell
             shell.setPtyType("xterm-256color", terminalCols, terminalRows, 0, 0)
             shell.setPtySize(terminalCols, terminalRows, terminalCols * 8, terminalRows * 16)
-            shell.setEnv("TERM", "xterm-256color")
-            shell.setEnv("COLORTERM", "truecolor")
-            shell.setEnv("LANG", "en_US.UTF-8")
+            try {
+                shell.setEnv("TERM", "xterm-256color")
+                shell.setEnv("COLORTERM", "truecolor")
+                shell.setEnv("LANG", "en_US.UTF-8")
+            } catch (_: Exception) {
+                // Servers may refuse environment requests; that is harmless.
+            }
             channel = shell
 
             val stream = shell.inputStream
@@ -196,6 +200,14 @@ class SshSession(
             shell.connect(20_000)
             channelOut = out
             connected = true
+
+            // The view may have been laid out while the channel was still opening;
+            // push the freshest grid size now that a PTY exists.
+            try {
+                shell.setPtySize(terminalCols, terminalRows, terminalCols * 8, terminalRows * 16)
+            } catch (_: Exception) {
+            }
+
             post { listener.onConnected() }
 
             val buffer = ByteArray(32 * 1024)
